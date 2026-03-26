@@ -37,6 +37,8 @@ result = custom_chat_input(
     placeholder="Type a message or paste an image (Ctrl+V)...",
     key="chat_input",
     history=st.session_state.input_history,
+    slash_commands=["help", "clear", "reset", "settings", "export", "history"],
+    at_commands=["assistant", "user", "system", "everyone"],
 )
 
 if result is not None:

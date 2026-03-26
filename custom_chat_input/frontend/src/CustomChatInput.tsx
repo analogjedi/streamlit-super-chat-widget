@@ -34,13 +34,20 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
   const [draftText, setDraftText] = useState<string>("")
   const [isFocused, setIsFocused] = useState<boolean>(false)
   const [isDragOver, setIsDragOver] = useState<boolean>(false)
+  const [popupVisible, setPopupVisible] = useState<boolean>(false)
+  const [popupType, setPopupType] = useState<"/" | "@" | null>(null)
+  const [filteredCommands, setFilteredCommands] = useState<string[]>([])
+  const [selectedIndex, setSelectedIndex] = useState<number>(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const popupRef = useRef<HTMLDivElement>(null)
 
   const placeholder = args["placeholder"] || "Type a message..."
   const maxChars = args["max_chars"] || 0
   const maxImageSize = args["max_image_size_mb"] || 5
   const acceptedTypes = args["accepted_image_types"] || ["image/png", "image/jpeg", "image/gif", "image/webp"]
+  const slashCommands: string[] = args["slash_commands"] || []
+  const atCommands: string[] = args["at_commands"] || []
 
   // Restore history from args (Python side persists it in session_state)
   useEffect(() => {
@@ -58,14 +65,67 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     }
   }, [text])
 
+  // Autocomplete popup logic
+  useEffect(() => {
+    if (text.startsWith("/") && slashCommands.length > 0) {
+      const query = text.slice(1).toLowerCase()
+      if (!/\s/.test(query)) {
+        const matches = query.length === 0
+          ? slashCommands
+          : slashCommands.filter(cmd => cmd.toLowerCase().includes(query))
+        if (matches.length > 0) {
+          setFilteredCommands(matches)
+          setPopupVisible(true)
+          setPopupType("/")
+          setSelectedIndex(0)
+          return
+        }
+      }
+    }
+
+    if (text.startsWith("@") && atCommands.length > 0) {
+      const query = text.slice(1).toLowerCase()
+      if (!/\s/.test(query)) {
+        const matches = query.length === 0
+          ? atCommands
+          : atCommands.filter(cmd => cmd.toLowerCase().includes(query))
+        if (matches.length > 0) {
+          setFilteredCommands(matches)
+          setPopupVisible(true)
+          setPopupType("@")
+          setSelectedIndex(0)
+          return
+        }
+      }
+    }
+
+    setPopupVisible(false)
+    setPopupType(null)
+    setFilteredCommands([])
+    setSelectedIndex(0)
+  }, [text, slashCommands, atCommands])
+
+  // Scroll selected popup item into view
+  useEffect(() => {
+    if (popupVisible && popupRef.current) {
+      const selectedEl = popupRef.current.children[selectedIndex] as HTMLElement
+      if (selectedEl) {
+        selectedEl.scrollIntoView({ block: "nearest" })
+      }
+    }
+  }, [selectedIndex, popupVisible])
+
   // Set frame height dynamically
   useEffect(() => {
     const baseHeight = 70
     const imagePreviewHeight = images.length > 0 ? 84 : 0
     const textLines = (text.match(/\n/g) || []).length
     const extraTextHeight = Math.min(textLines * 20, 144)
-    Streamlit.setFrameHeight(baseHeight + imagePreviewHeight + extraTextHeight)
-  }, [text, images])
+    const popupHeight = popupVisible && filteredCommands.length > 0
+      ? Math.min(filteredCommands.length * 36, 200) + 8
+      : 0
+    Streamlit.setFrameHeight(baseHeight + imagePreviewHeight + extraTextHeight + popupHeight)
+  }, [text, images, popupVisible, filteredCommands])
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -112,6 +172,17 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     },
     [maxImageSize]
   )
+
+  // Select a command from the autocomplete popup
+  const selectCommand = useCallback((command: string) => {
+    const prefix = popupType || "/"
+    setText(prefix + command + " ")
+    setPopupVisible(false)
+    setPopupType(null)
+    setFilteredCommands([])
+    setSelectedIndex(0)
+    textareaRef.current?.focus()
+  }, [popupType])
 
   // Handle paste event - intercept images from clipboard
   const handlePaste = useCallback(
@@ -191,6 +262,39 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
   // Handle keyboard events
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Autocomplete popup keyboard handling (takes priority)
+      if (popupVisible && filteredCommands.length > 0) {
+        if (e.key === "ArrowUp") {
+          e.preventDefault()
+          setSelectedIndex(prev =>
+            prev <= 0 ? filteredCommands.length - 1 : prev - 1
+          )
+          return
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault()
+          setSelectedIndex(prev =>
+            prev >= filteredCommands.length - 1 ? 0 : prev + 1
+          )
+          return
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault()
+          selectCommand(filteredCommands[selectedIndex])
+          return
+        }
+        if (e.key === "Tab") {
+          e.preventDefault()
+          selectCommand(filteredCommands[selectedIndex])
+          return
+        }
+        if (e.key === "Escape") {
+          e.preventDefault()
+          setPopupVisible(false)
+          return
+        }
+      }
+
       // Submit on Enter (without Shift)
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault()
@@ -242,7 +346,7 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
         }
       }
     },
-    [handleSubmit, history, historyIndex, text, draftText]
+    [handleSubmit, history, historyIndex, text, draftText, popupVisible, filteredCommands, selectedIndex, selectCommand]
   )
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -409,8 +513,60 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     padding: "2px 4px 0 0",
   }
 
+  const popupContainerStyle: React.CSSProperties = {
+    backgroundColor: theme?.backgroundColor || "#ffffff",
+    border: `1px solid ${theme?.primaryColor || "#ff4b4b"}44`,
+    borderRadius: "8px",
+    boxShadow: "0 -2px 8px rgba(0, 0, 0, 0.08)",
+    maxHeight: "200px",
+    overflowY: "auto",
+    marginBottom: "4px",
+  }
+
+  const popupItemStyle: React.CSSProperties = {
+    padding: "8px 12px",
+    cursor: "pointer",
+    fontSize: "14px",
+    color: theme?.textColor || "#333",
+    transition: "background-color 0.1s",
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+  }
+
+  const popupPrefixStyle: React.CSSProperties = {
+    color: theme?.primaryColor || "#ff4b4b",
+    fontWeight: 600,
+    opacity: 0.7,
+  }
+
   return (
     <div style={containerStyle}>
+      {/* Autocomplete popup */}
+      {popupVisible && filteredCommands.length > 0 && (
+        <div ref={popupRef} style={popupContainerStyle}>
+          {filteredCommands.map((cmd, idx) => (
+            <div
+              key={cmd}
+              style={{
+                ...popupItemStyle,
+                backgroundColor: idx === selectedIndex
+                  ? (theme?.primaryColor || "#ff4b4b") + "22"
+                  : "transparent",
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                selectCommand(cmd)
+              }}
+              onMouseEnter={() => setSelectedIndex(idx)}
+            >
+              <span style={popupPrefixStyle}>{popupType}</span>
+              {cmd}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* File/image previews */}
       {images.length > 0 && (
         <div style={imagePreviewContainerStyle}>
@@ -512,7 +668,10 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
+          onBlur={() => {
+            setIsFocused(false)
+            setTimeout(() => setPopupVisible(false), 150)
+          }}
           placeholder={placeholder}
           disabled={disabled}
           rows={1}

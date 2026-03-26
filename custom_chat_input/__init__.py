@@ -37,6 +37,8 @@ def custom_chat_input(
     max_image_size_mb: int = 5,
     accepted_image_types: Optional[List[str]] = None,
     history: Optional[List[str]] = None,
+    slash_commands: Optional[List[str]] = None,
+    at_commands: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     A custom chat input widget with image paste and input history support.
@@ -56,6 +58,14 @@ def custom_chat_input(
     history : list of str or None
         List of previous input entries for up-arrow navigation.
         Typically stored in st.session_state.
+    slash_commands : list of str or None
+        List of available commands for the '/' prefix autocomplete.
+        When the user types '/' at the start of input, matching commands
+        are shown in a popup. Commands should NOT include the '/' prefix.
+    at_commands : list of str or None
+        List of available commands for the '@' prefix autocomplete.
+        When the user types '@' at the start of input, matching commands
+        are shown in a popup. Commands should NOT include the '@' prefix.
 
     Returns
     -------
@@ -78,6 +88,8 @@ def custom_chat_input(
         max_image_size_mb=max_image_size_mb,
         accepted_image_types=accepted_image_types,
         history=history,
+        slash_commands=slash_commands or [],
+        at_commands=at_commands or [],
         key=key,
         default=None,
     )

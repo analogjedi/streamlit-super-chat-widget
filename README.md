@@ -6,6 +6,7 @@ A custom Streamlit chat input component built with React and TypeScript that ext
 - **File attachments** — paperclip button for uploading any file type
 - **Drag & drop** — drop images or files onto the input area
 - **Input history** — Up/Down arrow keys cycle through previous entries (like a terminal)
+- **Command autocomplete** — type `/` or `@` to get a filtered popup of available commands
 - **Auto-resizing textarea** — grows with content, up to a max height
 - **Theme-aware** — inherits your Streamlit theme colors automatically
 
@@ -125,6 +126,8 @@ custom_chat_input(
         "image/webp",
     ],
     history=["prev 1", "prev 2"],       # Input history for up-arrow navigation
+    slash_commands=["help", "clear"],    # Commands shown when user types '/'
+    at_commands=["assistant", "user"],   # Commands shown when user types '@'
 )
 ```
 
@@ -173,11 +176,37 @@ for f in result["images"]:
 
 | Shortcut | Action |
 |----------|--------|
-| `Enter` | Send message |
+| `Enter` | Send message (or select command when popup is open) |
 | `Shift+Enter` | New line |
-| `Up Arrow` | Previous history entry (when cursor is at start) |
-| `Down Arrow` | Next history entry (when cursor is at end) |
+| `Up Arrow` | Previous history entry (or navigate popup up) |
+| `Down Arrow` | Next history entry (or navigate popup down) |
+| `Tab` | Select highlighted command (when popup is open) |
+| `Escape` | Dismiss command popup |
 | `Ctrl/Cmd+V` | Paste image from clipboard |
+
+### Command Autocomplete
+
+Provide lists of slash commands and/or at-commands to enable an autocomplete popup. When the user types `/` or `@` at the start of their input, a filtered list of matching commands appears above the input.
+
+```python
+result = custom_chat_input(
+    placeholder="Type a message, /command, or @mention...",
+    key="chat",
+    history=st.session_state.input_history,
+    slash_commands=["help", "clear", "reset", "settings", "export", "history"],
+    at_commands=["assistant", "user", "system", "everyone"],
+)
+```
+
+Commands are passed **without** the prefix character. The popup displays the prefix automatically (e.g., `/help`, `@assistant`).
+
+**Behavior:**
+- Typing `/` shows all slash commands; typing `/he` filters to matches containing "he"
+- Same for `@` with at-commands
+- Arrow keys navigate the popup, Enter or Tab selects, Escape dismisses
+- Selecting a command fills the input with the command followed by a space, so the user can continue typing arguments
+- The popup closes automatically once a space or newline follows the command
+- When no command lists are provided, the feature is completely inactive — zero behavioral change
 
 ### Rebuilding the Frontend
 
@@ -202,6 +231,154 @@ For live-reloading during frontend development:
 3. In another terminal: `streamlit run app.py`
 
 The component will load from `localhost:3001` instead of the static build.
+
+## Integration Example — Streamlit Chat App with Bottom Pinning
+
+### Bottom-of-Page Positioning
+
+Streamlit's native `st.chat_input()` auto-pins to the viewport bottom. Custom
+components render inline by default. To get the same fixed-bottom behavior, render
+inside `st._bottom` — Streamlit's internal bottom delta generator:
+
+```python
+import streamlit as st
+from custom_chat_input import custom_chat_input
+
+with st._bottom:
+    result = custom_chat_input(
+        placeholder="Type a message...",
+        key="main_chat_input",
+    )
+```
+
+`st._bottom` uses the same `RootContainer.BOTTOM` mechanism that `st.chat_input()`
+uses internally. No custom CSS is needed.
+
+### Deduplication (Required)
+
+Streamlit custom components retain their last return value across reruns. Without
+deduplication, every `st.rerun()` will re-process the previous submission.
+
+```python
+import streamlit as st
+from custom_chat_input import custom_chat_input
+
+# Initialize session state
+if "chat_widget_last_fingerprint" not in st.session_state:
+    st.session_state["chat_widget_last_fingerprint"] = None
+if "chat_input_history" not in st.session_state:
+    st.session_state["chat_input_history"] = []
+
+# Render widget
+with st._bottom:
+    result = custom_chat_input(
+        placeholder="Type a message...",
+        history=st.session_state.get("chat_input_history", []),
+        key="main_chat_input",
+    )
+
+# Process only genuinely new submissions
+if result is not None:
+    fingerprint = (
+        result.get("text", ""),
+        len(result.get("images", [])),
+        "|".join(f.get("name", "") for f in result.get("images", [])),
+    )
+    if fingerprint != st.session_state.get("chat_widget_last_fingerprint"):
+        st.session_state["chat_widget_last_fingerprint"] = fingerprint
+
+        # Process the submission
+        text = result.get("text", "")
+        images = result.get("images", [])
+
+        # Update input history
+        if text.strip():
+            hist = st.session_state["chat_input_history"]
+            if text in hist:
+                hist.remove(text)
+            hist.append(text)
+            st.session_state["chat_input_history"] = hist[-50:]
+
+        # Your processing logic here
+        st.write(f"Message: {text}")
+        st.write(f"Attachments: {len(images)}")
+```
+
+### Adapter for File Processing Pipelines
+
+If your app has existing file processing that expects Streamlit's `UploadedFile`
+interface (`.name`, `.type`, `.read()`, `.seek()`, `.getvalue()`), use this adapter
+to create compatible objects from the widget's base64 return data:
+
+```python
+import base64
+import io
+from typing import Optional
+
+
+class WidgetUploadedFile(io.BytesIO):
+    """Mimics Streamlit's UploadedFile from widget base64 data.
+
+    Extends io.BytesIO for universal compatibility with PIL.Image.open(),
+    pandas.read_csv(), PdfReader(), and any library that reads file-like objects.
+    """
+
+    def __init__(self, name: str, data: bytes, file_type: str, size: int):
+        super().__init__(data)
+        self.name = name
+        self.type = file_type
+        self.size = size
+
+
+class WidgetPrompt:
+    """Matches st.chat_input() return interface: .text and .files"""
+
+    def __init__(self, text: str, files: Optional[list] = None):
+        self.text = text
+        self.files = files
+
+
+def translate_widget_result(result: dict) -> WidgetPrompt:
+    """Convert custom_chat_input() return dict into a WidgetPrompt.
+
+    All attachments (images and non-image files) are in result["images"],
+    distinguished by the "is_image" flag. Data is pure base64 (no data URI prefix).
+    """
+    text = result.get("text", "")
+    files = []
+
+    for attachment in result.get("images", []):
+        raw_bytes = base64.b64decode(attachment["data"])
+        files.append(
+            WidgetUploadedFile(
+                name=attachment.get("name", "file"),
+                data=raw_bytes,
+                file_type=attachment.get("type", "application/octet-stream"),
+                size=attachment.get("size", len(raw_bytes)),
+            )
+        )
+
+    return WidgetPrompt(text=text, files=files if files else None)
+```
+
+Usage with the adapter:
+
+```python
+if result is not None and fingerprint != last_fingerprint:
+    prompt = translate_widget_result(result)
+
+    if prompt.files:
+        for f in prompt.files:
+            st.write(f"File: {f.name} ({f.type}, {f.size} bytes)")
+            # f is a BytesIO — pass directly to PIL, pandas, etc.
+```
+
+### Summary
+
+The three key pieces for integration are:
+1. **`st._bottom`** for viewport-bottom positioning
+2. **Fingerprint dedup** to prevent reprocessing on reruns
+3. **`WidgetUploadedFile(io.BytesIO)`** adapter for downstream compatibility
 
 ## How It Works
 
