@@ -34,6 +34,7 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
   const [draftText, setDraftText] = useState<string>("")
   const [isFocused, setIsFocused] = useState<boolean>(false)
   const [isDragOver, setIsDragOver] = useState<boolean>(false)
+  const [isLoading, setIsLoading] = useState<boolean>(false)
   const [popupVisible, setPopupVisible] = useState<boolean>(false)
   const [popupType, setPopupType] = useState<"/" | "@" | null>(null)
   const [filteredCommands, setFilteredCommands] = useState<string[]>([])
@@ -124,8 +125,9 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     const popupHeight = popupVisible && filteredCommands.length > 0
       ? Math.min(filteredCommands.length * 36, 200) + 8
       : 0
-    Streamlit.setFrameHeight(baseHeight + imagePreviewHeight + extraTextHeight + popupHeight)
-  }, [text, images, popupVisible, filteredCommands])
+    const loadingHeight = isLoading ? 36 : 0
+    Streamlit.setFrameHeight(baseHeight + imagePreviewHeight + extraTextHeight + popupHeight + loadingHeight)
+  }, [text, images, popupVisible, filteredCommands, isLoading])
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -154,20 +156,27 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
         return true
       })
 
-      const newAttachments: FileAttachment[] = []
-      for (const file of validFiles) {
-        const base64 = await fileToBase64(file)
-        newAttachments.push({
-          name: file.name || (file.type.startsWith("image/") ? `pasted-image-${Date.now()}.png` : `file-${Date.now()}`),
-          type: file.type,
-          data: base64,
-          size: file.size,
-          is_image: file.type.startsWith("image/"),
-        })
-      }
+      if (validFiles.length === 0) return
 
-      if (newAttachments.length > 0) {
-        setImages((prev) => [...prev, ...newAttachments])
+      setIsLoading(true)
+      try {
+        const newAttachments: FileAttachment[] = []
+        for (const file of validFiles) {
+          const base64 = await fileToBase64(file)
+          newAttachments.push({
+            name: file.name || (file.type.startsWith("image/") ? `pasted-image-${Date.now()}.png` : `file-${Date.now()}`),
+            type: file.type,
+            data: base64,
+            size: file.size,
+            is_image: file.type.startsWith("image/"),
+          })
+        }
+
+        if (newAttachments.length > 0) {
+          setImages((prev) => [...prev, ...newAttachments])
+        }
+      } finally {
+        setIsLoading(false)
       }
     },
     [maxImageSize]
@@ -567,6 +576,29 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
         </div>
       )}
 
+      {/* Loading indicator */}
+      {isLoading && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "8px 12px",
+          fontSize: "13px",
+          color: theme?.textColor || "#666",
+          opacity: 0.8,
+          animation: "pulse 1.5s ease-in-out infinite",
+        }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme?.primaryColor || "#ff4b4b"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
+            <path d="M21 12a9 9 0 11-6.219-8.56" />
+          </svg>
+          Uploading files...
+          <style>{`
+            @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+          `}</style>
+        </div>
+      )}
+
       {/* File/image previews */}
       {images.length > 0 && (
         <div style={imagePreviewContainerStyle}>
@@ -673,13 +705,13 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
             setTimeout(() => setPopupVisible(false), 150)
           }}
           placeholder={placeholder}
-          disabled={disabled}
+          disabled={disabled || isLoading}
           rows={1}
         />
         <button
           style={sendButtonStyle}
           onClick={handleSubmit}
-          disabled={disabled || (!text.trim() && images.length === 0)}
+          disabled={disabled || isLoading || (!text.trim() && images.length === 0)}
           title="Send message (Enter)"
         >
           <svg
