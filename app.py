@@ -39,6 +39,7 @@ result = custom_chat_input(
     history=st.session_state.input_history,
     slash_commands=["help", "clear", "reset", "settings", "export", "history"],
     at_commands=["assistant", "user", "system", "everyone"],
+    max_image_size_mb=100,
 )
 
 if result is not None:

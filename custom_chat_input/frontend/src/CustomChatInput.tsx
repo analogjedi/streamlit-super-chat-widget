@@ -35,6 +35,7 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
   const [isFocused, setIsFocused] = useState<boolean>(false)
   const [isDragOver, setIsDragOver] = useState<boolean>(false)
   const [isLoading, setIsLoading] = useState<boolean>(false)
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
   const [popupVisible, setPopupVisible] = useState<boolean>(false)
   const [popupType, setPopupType] = useState<"/" | "@" | null>(null)
   const [filteredCommands, setFilteredCommands] = useState<string[]>([])
@@ -55,6 +56,8 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     if (args["history"] && Array.isArray(args["history"])) {
       setHistory(args["history"])
     }
+    // Reset submit indicator when Streamlit re-renders with new args
+    setIsSubmitting(false)
   }, [args])
 
   // Auto-resize textarea
@@ -159,6 +162,8 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
       if (validFiles.length === 0) return
 
       setIsLoading(true)
+      // Yield to renderer so the loading indicator paints before processing
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
       try {
         const newAttachments: FileAttachment[] = []
         for (const file of validFiles) {
@@ -241,9 +246,14 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
   )
 
   // Submit message
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const trimmedText = text.trim()
     if (!trimmedText && images.length === 0) return
+
+    // Show submitting indicator
+    setIsSubmitting(true)
+    // Yield to renderer so the spinner paints before the blocking setComponentValue call
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
 
     // Add to history
     if (trimmedText) {
@@ -576,7 +586,7 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
         </div>
       )}
 
-      {/* Loading indicator */}
+      {/* Loading indicator (file conversion) */}
       {isLoading && (
         <div style={{
           display: "flex",
@@ -591,7 +601,7 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme?.primaryColor || "#ff4b4b"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
             <path d="M21 12a9 9 0 11-6.219-8.56" />
           </svg>
-          Uploading files...
+          Preparing files...
           <style>{`
             @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
             @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
@@ -656,6 +666,31 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
         onDrop={handleDrop}
       >
         <div style={dragOverlayStyle}>Drop images here</div>
+        {/* Submit overlay — covers input area while sending */}
+        {isSubmitting && (
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            background: `${theme?.secondaryBackgroundColor || "#f8f9fa"}ee`,
+            borderRadius: "12px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            zIndex: 10,
+            gap: "8px",
+            fontSize: "13px",
+            color: theme?.textColor || "#666",
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme?.primaryColor || "#ff4b4b"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
+              <path d="M21 12a9 9 0 11-6.219-8.56" />
+            </svg>
+            Sending...
+            <style>{`
+              @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            `}</style>
+          </div>
+        )}
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
@@ -668,8 +703,8 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
         <button
           style={attachButtonStyle}
           onClick={handleFileButtonClick}
-          disabled={disabled}
-          title="Attach image"
+          disabled={disabled || isLoading || isSubmitting}
+          title="Attach files"
           onMouseEnter={(e) => {
             e.currentTarget.style.opacity = "1"
             e.currentTarget.style.background = theme?.secondaryBackgroundColor ? "rgba(0,0,0,0.05)" : "#eee"
@@ -705,13 +740,13 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
             setTimeout(() => setPopupVisible(false), 150)
           }}
           placeholder={placeholder}
-          disabled={disabled || isLoading}
+          disabled={disabled || isLoading || isSubmitting}
           rows={1}
         />
         <button
           style={sendButtonStyle}
           onClick={handleSubmit}
-          disabled={disabled || isLoading || (!text.trim() && images.length === 0)}
+          disabled={disabled || isLoading || isSubmitting || (!text.trim() && images.length === 0)}
           title="Send message (Enter)"
         >
           <svg
