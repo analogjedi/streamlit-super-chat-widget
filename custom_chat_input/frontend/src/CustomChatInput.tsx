@@ -43,6 +43,8 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
+  const skipNextArgsRef = useRef<boolean>(false)
+  const submitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const placeholder = args["placeholder"] || "Type a message..."
   const maxChars = args["max_chars"] || 0
@@ -56,8 +58,18 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     if (args["history"] && Array.isArray(args["history"])) {
       setHistory(args["history"])
     }
-    // Reset submit indicator when Streamlit re-renders with new args
+    // After submit, the first args change is from the rerun we triggered —
+    // skip it so the overlay stays visible during processing. Clear on
+    // the second args change (the app's st.rerun() after processing).
+    if (skipNextArgsRef.current) {
+      skipNextArgsRef.current = false
+      return
+    }
     setIsSubmitting(false)
+    if (submitTimeoutRef.current) {
+      clearTimeout(submitTimeoutRef.current)
+      submitTimeoutRef.current = null
+    }
   }, [args])
 
   // Auto-resize textarea
@@ -250,9 +262,13 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     const trimmedText = text.trim()
     if (!trimmedText && images.length === 0) return
 
-    // Show submitting indicator
+    // Show submitting overlay and skip the next args change (the rerun we trigger)
     setIsSubmitting(true)
-    // Yield to renderer so the spinner paints before the blocking setComponentValue call
+    skipNextArgsRef.current = true
+    // Safety fallback: clear overlay after 2 minutes even if no second rerun arrives
+    if (submitTimeoutRef.current) clearTimeout(submitTimeoutRef.current)
+    submitTimeoutRef.current = setTimeout(() => setIsSubmitting(false), 120000)
+    // Yield to renderer so the overlay paints before setComponentValue
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
 
     // Add to history
