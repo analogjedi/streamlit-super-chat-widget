@@ -1,6 +1,6 @@
 # Streamlit Super Chat Widget
 
-A custom Streamlit chat input component built with React and TypeScript that extends the default `st.chat_input` with features missing from the stock widget:
+A custom Streamlit chat input component built with React and TypeScript that extends the default `st.chat_input` with features missing from the stock widget — and eliminates the **Axios-500 file upload error** that affects Kubernetes and load-balanced deployments.
 
 - **Clipboard image paste** — Ctrl+V / Cmd+V pastes images directly into the input
 - **File attachments** — paperclip button for uploading any file type
@@ -8,7 +8,55 @@ A custom Streamlit chat input component built with React and TypeScript that ext
 - **Input history** — Up/Down arrow keys cycle through previous entries (like a terminal)
 - **Command autocomplete** — type `/` or `@` to get a filtered popup of available commands
 - **Auto-resizing textarea** — grows with content, up to a max height
+- **Upload feedback** — "Sending..." overlay for large file transfers (>1MB)
 - **Theme-aware** — inherits your Streamlit theme colors automatically
+- **Kubernetes safe** — no sticky sessions required (see below)
+
+## Why Not `st.chat_input`?
+
+### The Kubernetes Axios-500 Problem
+
+Streamlit's built-in `chat_input` (with `accept_file`) uploads files via **separate HTTP PUT requests** to `/_stcore/upload_file/{session_id}/{file_id}`. When deployed behind a load balancer (Kubernetes, AWS ELB, etc.), these PUT requests can be routed to a **different pod** than the one holding the user's session:
+
+```
+AxiosError: Request failed with status code 500
+```
+
+The standard workaround is enabling sticky sessions on the load balancer, which adds operational complexity and can cause uneven load distribution.
+
+### How This Component Avoids It
+
+This component sends **all data through the Streamlit WebSocket** via `Streamlit.setComponentValue()`. Files are base64-encoded in the browser and included in the component value alongside the text. Since the WebSocket is a single persistent connection, there are no separate HTTP requests for a load balancer to misroute.
+
+| | `st.chat_input` | `custom_chat_input` |
+|---|---|---|
+| File transfer method | HTTP PUT (separate requests) | WebSocket (single connection) |
+| K8s sticky sessions required | Yes | **No** |
+| Axios-500 risk | Yes | **No** |
+| Upload progress | Native browser progress | "Sending..." overlay (files >1MB) |
+
+### Trade-offs
+
+- **Base64 overhead** — files are ~33% larger in transit (a 10MB file becomes ~13.3MB over the WebSocket)
+- **No per-byte progress** — the WebSocket transfer is all-or-nothing; for files >1MB a "Sending..." overlay provides visual feedback
+- **Browser memory** — large files are held as base64 strings in memory until submission
+
+### How the Upload Overlay Works
+
+For large file attachments (>1MB total), the component shows a "Sending..." overlay on the input area during the transfer and processing cycle. This uses a **skip-one-rerun technique** to persist through Streamlit's rerun lifecycle:
+
+1. User clicks Submit with files >1MB attached
+2. Component shows "Sending..." overlay and sets a flag to skip the next args update
+3. `setComponentValue()` sends the base64 payload and triggers **Rerun A** (the immediate rerun)
+4. **Rerun A**: component receives new args but the skip flag prevents clearing the overlay
+5. Your app processes the result and calls `st.rerun()`, triggering **Rerun B**
+6. **Rerun B**: component receives args again, skip flag is consumed, overlay clears
+
+For text-only or small file submissions (<1MB), processing is fast enough that the overlay is not shown — avoiding a React 18 batching edge case where both reruns merge into a single render cycle.
+
+A 2-minute safety timeout ensures the overlay clears even if `st.rerun()` is never called.
+
+> **Important**: Your app must call `st.rerun()` after processing a submission for the overlay to clear promptly. This is already standard practice for the required deduplication pattern (see below).
 
 ## Quick Start
 
