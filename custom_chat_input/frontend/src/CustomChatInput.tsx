@@ -262,14 +262,18 @@ const CustomChatInput: React.FC<ComponentProps> = ({ args, disabled, theme }) =>
     const trimmedText = text.trim()
     if (!trimmedText && images.length === 0) return
 
-    // Show submitting overlay and skip the next args change (the rerun we trigger)
-    setIsSubmitting(true)
-    skipNextArgsRef.current = true
-    // Safety fallback: clear overlay after 2 minutes even if no second rerun arrives
-    if (submitTimeoutRef.current) clearTimeout(submitTimeoutRef.current)
-    submitTimeoutRef.current = setTimeout(() => setIsSubmitting(false), 120000)
-    // Yield to renderer so the overlay paints before setComponentValue
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    // Show submitting overlay only for large payloads (>1MB) where transfer
+    // takes long enough to need visual feedback
+    const totalFileSize = images.reduce((sum, f) => sum + f.size, 0)
+    if (totalFileSize > 1 * 1024 * 1024) {
+      setIsSubmitting(true)
+      skipNextArgsRef.current = true
+      // Safety fallback: clear overlay after 2 minutes even if no second rerun arrives
+      if (submitTimeoutRef.current) clearTimeout(submitTimeoutRef.current)
+      submitTimeoutRef.current = setTimeout(() => setIsSubmitting(false), 120000)
+      // Yield to renderer so the overlay paints before setComponentValue
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    }
 
     // Add to history
     if (trimmedText) {
